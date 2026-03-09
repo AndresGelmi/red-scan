@@ -3,8 +3,20 @@ import time
 import gc
 from api_red import get_paradero
 from keys import WIFI_SSID, WIFI_PASSWORD
+from machine import Pin, I2C
+import ssd1306
 
-CODSIMT = "PC837"
+paraderos = ['PC837', 'PC836', 'PC831']
+
+i2c = I2C(0, scl=Pin(22), sda=Pin(21), freq=400000)
+
+oled = ssd1306.SSD1306_I2C(128, 64, i2c)  # o 128x32 según tu pantalla
+oled.fill(0)
+oled.text("Hola ESP32, Pantalla Funcional!", 0, 0)
+oled.show()
+
+
+
 
 
 def conectar_wifi(ssid, password, timeout=20):
@@ -36,34 +48,47 @@ def list_get(lst, index, default=None):
 
 def fill_data(raw_data):
     data = {
-        'result': False,
-        'address': "",
-        'servicio1': ['', {}, {}],
-        'servicio2': ['', {}, {}],
-        'servicio3': ['', {}, {}],
+        "result": False,
+        "paraderos": {}
     }
 
-    data["result"] = raw_data.get("ok", False)
-    data["address"] = raw_data.get("data", {}).get("nomett", "")
+    hay_al_menos_un_ok = False
 
-    buses = raw_data.get("data", {}).get("servicios", {}).get("item", [])
-    servicios_keys = ["servicio1", "servicio2", "servicio3"]
+    for codsimt, parada_raw in raw_data.items():
+        parada_data = {
+            "result": parada_raw.get("ok", False),
+            "address": parada_raw.get("data", {}).get("nomett", ""),
+            "servicios": []
+        }
 
-    for i, key in enumerate(servicios_keys):
-        bus = list_get(buses, i)
-        if not bus:
-            continue
+        if parada_data["result"]:
+            hay_al_menos_un_ok = True
 
-        data[key][0] = bus.get("servicio", "")
+        buses = parada_raw.get("data", {}).get("servicios", {}).get("item", [])
 
-        data[key][1]["patente"] = bus.get("ppubus1")
-        data[key][1]["distancia"] = bus.get("distanciabus1")
-        data[key][1]["tiempo"] = bus.get("horaprediccionbus1")
+        # Asegurar que buses sea lista
+        if isinstance(buses, dict):
+            buses = [buses]
 
-        data[key][2]["patente"] = bus.get("ppubus2")
-        data[key][2]["distancia"] = bus.get("distanciabus2")
-        data[key][2]["tiempo"] = bus.get("horaprediccionbus2")
+        for bus in buses:
+            servicio_data = {
+                "servicio": bus.get("servicio", ""),
+                "bus1": {
+                    "patente": bus.get("ppubus1"),
+                    "distancia": bus.get("distanciabus1"),
+                    "tiempo": bus.get("horaprediccionbus1")
+                },
+                "bus2": {
+                    "patente": bus.get("ppubus2"),
+                    "distancia": bus.get("distanciabus2"),
+                    "tiempo": bus.get("horaprediccionbus2")
+                }
+            }
+            parada_data["servicios"].append(servicio_data)
 
+        data["paraderos"][codsimt] = parada_data
+
+    data["result"] = hay_al_menos_un_ok
     return data
 
 
@@ -73,7 +98,12 @@ def main():
 
     print("mem libre antes de HTTPS:", gc.mem_free())
 
-    raw_data = get_paradero(CODSIMT)
+    paraderos = ["PC837", "PC836", "PC831"]
+    raw_data = {}
+
+    raw_data["PC837"] = get_paradero(paraderos[0])
+    raw_data["PC836"] = get_paradero(paraderos[1])
+    raw_data["PC831"] = get_paradero(paraderos[2])
 
     print("RAW:")
     print(raw_data)
