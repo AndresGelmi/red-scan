@@ -1,114 +1,90 @@
-from machine import Pin, I2C
-import ssd1306
-import urequests
 import network
 import time
-import ujson
+import gc
+from api_red import get_paradero
+from keys import WIFI_SSID, WIFI_PASSWORD
 
-import keys
+CODSIMT = "PC837"
 
 
-ssid = keys.WIFI_SSID
-password = keys.WIFI_PASSWORD
-
-API_URL = "https://api.xor.cl/red/bus-stop/PC837"
-error = ["Connection Error"]
-
-i2c = I2C(0, scl=Pin(22), sda=Pin(21), freq=400000)
-oled = ssd1306.SSD1306_I2C(128, 64, i2c)
-oled.fill(0)
-
-# function that connect to wi-fi
-def connect_wifi(ssid, password, timeout_s=20):
+def conectar_wifi(ssid, password, timeout=20):
     wlan = network.WLAN(network.STA_IF)
     wlan.active(True)
 
-    if wlan.isconnected():
-        print("Already connected:", wlan.ifconfig())
-        return wlan
+    if not wlan.isconnected():
+        print("Conectando a WiFi...")
+        wlan.connect(ssid, password)
 
-    print("Connecting to Wi-Fi:", ssid)
-    wlan.connect(ssid, password)
+        t0 = time.time()
+        while not wlan.isconnected():
+            if time.time() - t0 > timeout:
+                raise RuntimeError("Timeout conectando a WiFi")
+            print(".", end="")
+            time.sleep(0.5)
 
-    t0 = time.time()
-    while not wlan.isconnected():
-        st = wlan.status()
-        # En ESP32: 1001=conectando, 1010=GOT_IP (éxito), 201/202=errores típicos
-        if st == network.STAT_WRONG_PASSWORD:
-            print("Wrong password (202)")
-            return None
-        if st == network.STAT_NO_AP_FOUND:
-            print("No access point found (201) (note: must be 2.4 GHz)")
-            return None
-
-        if time.time() - t0 > timeout_s:
-            print("Timeout. status =", st)
-            return None
-
-        time.sleep(0.3)
-
-    print("Connected! IP:", wlan.ifconfig()[0], "status:", wlan.status())
+    print("\nWiFi conectado")
+    print("IP:", wlan.ifconfig()[0])
     return wlan
-    
-def on_receive(response_text):
-    """
-    Procesa el texto de la respuesta JSON, lo convierte en diccionario
-    e intenta extraer la información de 'services'.
-    """
-    print("\n--- Procesando respuesta en on_receive ---")
+
+
+def list_get(lst, index, default=None):
     try:
-        # 1. Convertir el texto JSON en un diccionario Python
-        response = ujson.loads(response_text)
-        return response
-    except ValueError as e:
-        # Esto ocurre si response_text no es un JSON válido
-        print(f"Error al decodificar JSON: {e}")
-        print("El texto recibido no parece ser JSON válido.")
-        print("Texto recibido:", response_text) # Muestra lo que se recibió
-        print("----------------------------------------")
-    except Exception as e:
-        # Captura otros posibles errores
-        print(f"Ocurrió un error inesperado en on_receive: {e}")
-        print("----------------------------------------")
+        return lst[index]
+    except (IndexError, TypeError):
+        return default
 
 
-# --- Función principal ---
-def api_call():
-    # 1. Conectar a Wi-Fi
-    wlan = connect_wifi(ssid, password)
+def fill_data(raw_data):
+    data = {
+        'result': False,
+        'address': "",
+        'servicio1': ['', {}, {}],
+        'servicio2': ['', {}, {}],
+        'servicio3': ['', {}, {}],
+    }
 
-    if wlan:
-        # Solo procede si la conexión Wi-Fi fue exitosa
-        print(f"\nRealizando request a: {API_URL}")
-        response = None # Inicializa la variable de respuesta
-        try:
-            print("Api called")
-            # 2. Realizar la solicitud GET
-            response = urequests.get(API_URL, timeout=15) # Aumenté un poco el timeout
+    data["result"] = raw_data.get("ok", False)
+    data["address"] = raw_data.get("data", {}).get("nomett", "")
 
-            # 3. Procesar la respuesta
-            print(f"Código de estado HTTP: {response.status_code}")
+    buses = raw_data.get("data", {}).get("servicios", {}).get("item", [])
+    servicios_keys = ["servicio1", "servicio2", "servicio3"]
 
-            if response.status_code == 200:
-                # Llama a on_receive pasando el CONTENIDO TEXTUAL de la respuesta
-                return on_receive(response.text)
-            else:
-                print(f"Error en la solicitud: Código {response.status_code}")
-                try:
-                    print("Contenido del error (si existe):")
-                    print(response.text)
-                except Exception as e:
-                    print(f"No se pudo leer el contenido del error: {e}")
+    for i, key in enumerate(servicios_keys):
+        bus = list_get(buses, i)
+        if not bus:
+            continue
 
-        except Exception as e:
-            print(f"Ocurrió un error durante la solicitud HTTP: {e}")
+        data[key][0] = bus.get("servicio", "")
 
-        finally:
-            # 4. Cerrar la respuesta (MUY IMPORTANTE para liberar memoria)
-            if response:
-                response.close()
-                print("\nConexión de respuesta cerrada.")
+        data[key][1]["patente"] = bus.get("ppubus1")
+        data[key][1]["distancia"] = bus.get("distanciabus1")
+        data[key][1]["tiempo"] = bus.get("horaprediccionbus1")
 
-    else:
-        return error[0]  
-api_call()
+        data[key][2]["patente"] = bus.get("ppubus2")
+        data[key][2]["distancia"] = bus.get("distanciabus2")
+        data[key][2]["tiempo"] = bus.get("horaprediccionbus2")
+
+    return data
+
+
+def main():
+    gc.collect()
+    wlan = conectar_wifi(WIFI_SSID, WIFI_PASSWORD)
+
+    print("mem libre antes de HTTPS:", gc.mem_free())
+
+    raw_data = get_paradero(CODSIMT)
+
+    print("RAW:")
+    print(raw_data)
+
+    data = fill_data(raw_data)
+
+    print("DATA:")
+    print(data)
+
+    return data
+
+
+print(main())
+
