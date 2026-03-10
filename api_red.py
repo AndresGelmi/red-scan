@@ -199,7 +199,6 @@ def consultar_prediccion(codsimt, token):
     }
 
 
-def get_paradero(codsimt):
-    token = extraer_token_paradero(codsimt)
+def get_paradero_con_token(codsimt, token):
     return consultar_prediccion(codsimt, token)
 
